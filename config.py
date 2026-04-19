@@ -1,0 +1,8 @@
+import os
+
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
+BLE_DEVICE_NAME = "penDNA"
+CAMERA_INDEX = 0
+HOST = "0.0.0.0"
+PORT = 5000
+CAPTURE_RATE = 30
