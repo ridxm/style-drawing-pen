@@ -2,6 +2,8 @@ venv/
 __pycache__/
 *.pyc
 .env
+demo_output.json
+demo_output.png
 CLAUDE.md
 CLAUDE.local.md
 UI_DIRECTION.md
