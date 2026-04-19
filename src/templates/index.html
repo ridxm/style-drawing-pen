@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>penDNA v1.0</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="topbar-brand">penDNA <span class="brand-version">v1.0</span></div>
+  <div class="topbar-stats">
+    <span class="stat" id="stat-pen">
+      <span class="dot dot-cyan" id="dot-pen"></span>PEN: <b id="pen-state">CONNECTING</b>
+    </span>
+    <span class="stat" id="stat-cam">
+      <span class="dot dot-cyan" id="dot-cam"></span>CAMERA: <b id="cam-state">ACTIVE</b>
+    </span>
+    <span class="stat" id="stat-lat">
+      BLE LATENCY: <b id="lat-value">--</b>ms
+    </span>
+    <span class="stat" id="stat-cap">
+      <span class="dot dot-gray" id="dot-cap"></span>CAPTURE: <b id="cap-state">IDLE</b>
+    </span>
+    <span class="stat" id="stat-prof">
+      STYLE PROFILES: <b id="prof-count">0</b>
+    </span>
+  </div>
+</header>
+
+<main class="grid">
+
+  <!-- ========== LEFT COLUMN: LIVE CAPTURE ========== -->
+  <section class="col col-left">
+    <div class="col-header">LIVE CAPTURE</div>
+
+    <div class="panel video-panel">
+      <div class="panel-label">CAMERA / PATH</div>
+      <div class="video-stack">
+        <video id="webcam" autoplay playsinline muted></video>
+        <canvas id="pathCanvas"></canvas>
+        <div class="video-corners">
+          <span></span><span></span><span></span><span></span>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel sensor-panel">
+      <div class="panel-label">PRESSURE SENSORS</div>
+      <div class="bars" id="pressureBars">
+        <div class="bar-row" data-sensor="0">
+          <span class="bar-label">S1</span>
+          <div class="bar-track"><div class="bar-fill"></div></div>
+          <span class="bar-value">0.00</span>
+        </div>
+        <div class="bar-row" data-sensor="1">
+          <span class="bar-label">S2</span>
+          <div class="bar-track"><div class="bar-fill"></div></div>
+          <span class="bar-value">0.00</span>
+        </div>
+        <div class="bar-row" data-sensor="2">
+          <span class="bar-label">S3</span>
+          <div class="bar-track"><div class="bar-fill"></div></div>
+          <span class="bar-value">0.00</span>
+        </div>
+        <div class="bar-row" data-sensor="3">
+          <span class="bar-label">S4</span>
+          <div class="bar-track"><div class="bar-fill"></div></div>
+          <span class="bar-value">0.00</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel imu-panel">
+      <div class="panel-label">IMU / 6DOF</div>
+      <div class="imu-grid">
+        <span class="imu-cell">AX <b id="imu-ax">0.0</b></span>
+        <span class="imu-cell">AY <b id="imu-ay">0.0</b></span>
+        <span class="imu-cell">AZ <b id="imu-az">0.0</b></span>
+        <span class="imu-cell">GX <b id="imu-gx">0.0</b></span>
+        <span class="imu-cell">GY <b id="imu-gy">0.0</b></span>
+        <span class="imu-cell">GZ <b id="imu-gz">0.0</b></span>
+      </div>
+      <div class="pen-state-row">
+        <span class="pen-state-label">PEN STATUS</span>
+        <span class="pen-state-value pen-up" id="pen-status">PEN UP</span>
+      </div>
+    </div>
+
+    <div class="panel action-panel">
+      <button class="btn btn-primary" id="btn-capture">START CAPTURE</button>
+      <button class="btn btn-ghost" id="btn-clear">CLEAR</button>
+    </div>
+  </section>
+
+  <!-- ========== CENTER COLUMN: GENERATE ========== -->
+  <section class="col col-center">
+    <div class="col-header">GENERATE</div>
+
+    <div class="panel prompt-panel">
+      <div class="prompt-row">
+        <input
+          type="text"
+          id="prompt"
+          class="prompt-input"
+          placeholder="describe what to draw..."
+          autocomplete="off"
+        />
+        <button class="btn btn-violet" id="btn-generate">GENERATE IN MY STYLE</button>
+      </div>
+      <div class="prompt-meta">
+        <span class="split-toggle">
+          <input type="checkbox" id="split-toggle" />
+          <label for="split-toggle">SPLIT VIEW · COMPARE USERS</label>
+        </span>
+        <span class="style-tag">STYLE: <b id="style-tag">USER_A</b></span>
+      </div>
+    </div>
+
+    <div class="panel canvas-panel">
+      <div class="panel-label" id="canvas-label">OUTPUT</div>
+      <div class="draw-stack" id="drawStack">
+        <canvas id="drawCanvas"></canvas>
+        <canvas id="drawCanvasB" class="hidden"></canvas>
+        <div class="canvas-overlay" id="canvas-overlay">
+          <span class="overlay-text" id="overlay-text">draw something first, then generate</span>
+        </div>
+        <div class="split-divider hidden" id="split-divider"></div>
+        <div class="split-labels hidden" id="split-labels">
+          <span>USER_A</span><span>USER_B</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ========== RIGHT COLUMN: STYLE DNA ========== -->
+  <section class="col col-right">
+    <div class="col-header">STYLE DNA</div>
+
+    <div class="panel chart-panel">
+      <div class="panel-label">
+        <span>TREMOR SPECTRUM</span>
+        <span class="panel-meta">PEAK: <b id="tremor-peak">0.0</b>Hz</span>
+      </div>
+      <div class="chart-wrap"><canvas id="tremorChart"></canvas></div>
+    </div>
+
+    <div class="panel chart-panel">
+      <div class="panel-label">
+        <span>GRIP DYNAMICS</span>
+        <span class="panel-meta">4 SENSORS</span>
+      </div>
+      <div class="chart-wrap"><canvas id="gripChart"></canvas></div>
+    </div>
+
+    <div class="panel chart-panel">
+      <div class="panel-label">
+        <span>VELOCITY PROFILE</span>
+        <span class="panel-meta"><b id="vel-current">0</b>mm/s</span>
+      </div>
+      <div class="chart-wrap"><canvas id="velocityChart"></canvas></div>
+    </div>
+
+    <div class="panel chart-panel chart-row">
+      <div class="chart-half">
+        <div class="panel-label">GRIP FINGERPRINT</div>
+        <div class="chart-wrap"><canvas id="radarChart"></canvas></div>
+      </div>
+      <div class="chart-half">
+        <div class="panel-label">
+          <span>STYLE SIGNATURE</span>
+          <span class="panel-meta" id="sig-hash">--</span>
+        </div>
+        <div class="chart-wrap"><canvas id="signatureCanvas"></canvas></div>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>
