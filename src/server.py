@@ -9,7 +9,7 @@ import time
 from collections import deque
 from pathlib import Path
 
-from flask import Flask, send_from_directory
+from flask import Flask, render_template, send_from_directory
 from flask_socketio import SocketIO
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -175,7 +175,7 @@ def _ensure_threads():
 
 @app.route("/")
 def index():
-    return send_from_directory(app.template_folder, "index.html")
+    return render_template("index.html")
 
 
 @app.route("/health")
