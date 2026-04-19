@@ -1,6 +1,7 @@
 import eventlet
 eventlet.monkey_patch()
 
+import base64
 import logging
 import math
 import random
@@ -9,6 +10,8 @@ import time
 from collections import deque
 from pathlib import Path
 
+import cv2
+from eventlet import tpool
 from flask import Flask, render_template, send_from_directory
 from flask_socketio import SocketIO
 
@@ -17,6 +20,8 @@ sys.path.insert(0, str(ROOT))
 
 import config
 from src import pipeline
+from src.camera_tracker import CameraTracker
+from src.pen_receiver import PenReceiver
 
 logging.basicConfig(
     level=logging.INFO,
@@ -33,7 +38,7 @@ socketio = SocketIO(app, cors_allowed_origins="*", async_mode="eventlet")
 
 state = {
     "capturing": False,
-    "ble_thread": None,
+    "pen_thread": None,
     "camera_thread": None,
     "style_thread": None,
     "sensor_buffer": deque(maxlen=20000),
@@ -42,36 +47,13 @@ state = {
     "t0": time.time(),
 }
 
-
-def _fake_ble_reader():
-    t = 0.0
-    while True:
-        t += 1.0 / config.CAPTURE_RATE
-        base = 0.5 + 0.2 * math.sin(t * 1.3)
-        pressure = [
-            max(0.05, min(0.95, base + random.uniform(-0.05, 0.05) + 0.1 * math.sin(t * 2 + i)))
-            for i in range(4)
-        ]
-        imu = [
-            0.4 * math.sin(t * 1.1) + random.uniform(-0.05, 0.05) + 0.3 * math.sin(t * 9.0),
-            0.4 * math.cos(t * 0.9) + random.uniform(-0.05, 0.05) + 0.3 * math.cos(t * 9.0),
-            9.8 + random.uniform(-0.05, 0.05),
-            random.uniform(-0.3, 0.3),
-            random.uniform(-0.3, 0.3),
-            random.uniform(-0.3, 0.3),
-        ]
-        pen_down = (t % 4.0) < 3.0
-        yield {"t": time.time(), "pressure": pressure, "imu": imu, "pen_down": pen_down}
+_pen = PenReceiver()
 
 
-def _fake_camera_tracker():
-    # emit normalized coords in 0..1 for the frontend path overlay
-    t = 0.0
-    while True:
-        t += 1.0 / config.CAPTURE_RATE
-        x = 0.5 + 0.28 * math.cos(t * 0.7) + random.uniform(-0.005, 0.005)
-        y = 0.5 + 0.28 * math.sin(t * 0.7) + random.uniform(-0.005, 0.005)
-        yield {"t": time.time(), "x": x, "y": y, "lift": False}
+CAMERA_STREAM_WIDTH = 640      # resize before jpeg encode
+CAMERA_FRAME_FPS = 15
+CAMERA_POINT_FPS = 30
+LIFT_GAP_SEC = 0.25            # missing detection -> emit lift
 
 
 def _velocity_mm_s(prev, curr):
@@ -84,46 +66,124 @@ def _velocity_mm_s(prev, curr):
     return math.sqrt(dx * dx + dy * dy) / dt
 
 
-def _ble_loop():
-    log.info("ble thread started (mock)")
-    gen = _fake_ble_reader()
-    interval = 1.0 / config.CAPTURE_RATE
+def _pen_loop():
+    log.info("pen serial thread starting")
+    try:
+        port = tpool.execute(_pen.open)
+    except Exception as e:
+        log.warning("pen open failed: %s", e)
+        socketio.emit("pen_status", {"ok": False, "error": str(e)})
+        return
+    log.info("pen connected on %s", port)
+    socketio.emit("pen_status", {"ok": True, "port": port})
+
+    emit_interval = 1.0 / config.CAPTURE_RATE
+    next_emit = time.time()
+    last_sample_t = 0.0
+    last_status_sent = ""
+
     while True:
-        if state["capturing"]:
-            sample = next(gen)
-            state["sensor_buffer"].append(sample)
-            imu_list = sample["imu"]
-            velocity = _velocity_mm_s(state.get("_prev_path"), state["last_path"]) if state["last_path"] else 0.0
-            socketio.emit("sensor_data", {
-                "t": sample["t"],
-                "pressure": sample["pressure"],
-                "imu": {
-                    "ax": imu_list[0], "ay": imu_list[1], "az": imu_list[2],
-                    "gx": imu_list[3], "gy": imu_list[4], "gz": imu_list[5],
-                },
-                "pen_down": sample["pen_down"],
-                "velocity": velocity,
-                "latency": 8 + random.uniform(-2, 3),
+        # reads + parses in a real OS thread via tpool so eventlet stays free
+        tpool.execute(_pen.pump)
+
+        now = time.time()
+        if _pen.last_status and _pen.last_status != last_status_sent:
+            last_status_sent = _pen.last_status
+            socketio.emit("pen_status", {
+                "ok": True, "port": _pen.port, "message": last_status_sent,
+                "recording": _pen.recording,
             })
-        eventlet.sleep(interval)
+
+        if now >= next_emit:
+            next_emit = now + emit_interval
+            sample = _pen.latest()
+            if sample is not None and sample["t"] > last_sample_t:
+                last_sample_t = sample["t"]
+                if state["capturing"]:
+                    state["sensor_buffer"].append(sample)
+                imu_list = sample["imu"]
+                velocity = (
+                    _velocity_mm_s(state.get("_prev_path"), state["last_path"])
+                    if state["last_path"]
+                    else 0.0
+                )
+                socketio.emit("sensor_data", {
+                    "t": sample["t"],
+                    "pressure": sample["pressure"],
+                    "imu": {
+                        "ax": imu_list[0], "ay": imu_list[1], "az": imu_list[2],
+                        "gx": imu_list[3], "gy": imu_list[4], "gz": imu_list[5],
+                    },
+                    "pen_down": sample["pen_down"],
+                    "velocity": velocity,
+                    "latency": (now - sample["t"]) * 1000.0,
+                    "roll": sample["roll"],
+                    "pitch": sample["pitch"],
+                    "yaw": sample["yaw"],
+                })
+
+        eventlet.sleep(0)
+
+
+def _encode_frame(frame):
+    h, w = frame.shape[:2]
+    if w > CAMERA_STREAM_WIDTH:
+        scale = CAMERA_STREAM_WIDTH / w
+        frame = cv2.resize(frame, (CAMERA_STREAM_WIDTH, int(h * scale)))
+    ok, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 72])
+    if not ok:
+        return None
+    return base64.b64encode(buf.tobytes()).decode("ascii")
 
 
 def _camera_loop():
-    log.info("camera thread started (mock)")
-    gen = _fake_camera_tracker()
-    interval = 1.0 / config.CAPTURE_RATE
+    log.info("camera thread starting on index %d", config.CAMERA_INDEX)
+    tracker = CameraTracker()
+    try:
+        tracker.open()
+    except Exception as e:
+        log.warning("camera open failed: %s", e)
+        socketio.emit("camera_status", {"ok": False, "error": str(e)})
+        return
+    socketio.emit("camera_status", {"ok": True})
+
+    frame_interval = 1.0 / CAMERA_FRAME_FPS
+    last_frame_emit = 0.0
+    last_point_t = 0.0
+    lift_emitted = True
+
     while True:
-        if state["capturing"]:
-            point = next(gen)
-            state["path_buffer"].append(point)
-            state["_prev_path"] = state["last_path"]
-            state["last_path"] = point
-            socketio.emit("path_point", {
-                "x": point["x"], "y": point["y"],
-                "t": point["t"] * 1000.0,
-                "lift": point.get("lift", False),
-            })
-        eventlet.sleep(interval)
+        point, frame = tpool.execute(tracker.read)
+        now = time.time()
+
+        if frame is not None and now - last_frame_emit >= frame_interval:
+            b64 = _encode_frame(frame)
+            if b64 is not None:
+                socketio.emit("camera_frame", b64)
+            last_frame_emit = now
+
+        if point is not None:
+            last_point_t = now
+            drawing = bool(point.get("pen_drawing", True))
+            lift = not drawing
+            if not lift:
+                lift_emitted = False
+            payload = {
+                "x": point["x"],
+                "y": point["y"],
+                "t": now * 1000.0,
+                "lift": lift,
+            }
+            socketio.emit("path_point", payload)
+            if state["capturing"] and drawing:
+                state["path_buffer"].append(point)
+                state["_prev_path"] = state["last_path"]
+                state["last_path"] = point
+        elif not lift_emitted and now - last_point_t >= LIFT_GAP_SEC:
+            socketio.emit("path_point", {"x": 0, "y": 0, "t": now * 1000.0, "lift": True})
+            lift_emitted = True
+
+        eventlet.sleep(1.0 / CAMERA_POINT_FPS)
 
 
 def _style_loop():
@@ -164,11 +224,19 @@ def _style_loop():
         eventlet.sleep(1.0)
 
 
-def _ensure_threads():
-    if state["ble_thread"] is None:
-        state["ble_thread"] = socketio.start_background_task(_ble_loop)
+def _ensure_camera_thread():
     if state["camera_thread"] is None:
         state["camera_thread"] = socketio.start_background_task(_camera_loop)
+
+
+def _ensure_pen_thread():
+    if state["pen_thread"] is None:
+        state["pen_thread"] = socketio.start_background_task(_pen_loop)
+
+
+def _ensure_threads():
+    _ensure_pen_thread()
+    _ensure_camera_thread()
     if state["style_thread"] is None:
         state["style_thread"] = socketio.start_background_task(_style_loop)
 
@@ -180,18 +248,33 @@ def index():
 
 @app.route("/health")
 def health():
+    latest = _pen.latest()
     return {
         "ok": True,
         "capturing": state["capturing"],
         "sensor_samples": len(state["sensor_buffer"]),
         "path_points": len(state["path_buffer"]),
+        "pen": {
+            "connected": _pen.connected,
+            "port": _pen.port,
+            "recording": _pen.recording,
+            "buffered": len(_pen.snapshot()),
+            "last_status": _pen.last_status,
+            "latest": latest,
+        },
     }
 
 
 @socketio.on("connect")
 def on_connect():
     log.info("client connected")
+    _ensure_camera_thread()
+    _ensure_pen_thread()
     socketio.emit("status", {"capturing": state["capturing"]})
+    if _pen.connected:
+        socketio.emit("pen_status", {
+            "ok": True, "port": _pen.port, "recording": _pen.recording,
+        })
 
 
 @socketio.on("disconnect")
@@ -256,7 +339,7 @@ def _emit_generation(result, canvas):
         } for p in stroke]
         socketio.emit("stroke_data", {
             "points": pts,
-            "color": "#E8E6E1",
+            "color": "#1A1A1A",
             "thickness": thickness,
             "jitter": jitter,
             "speed_ms": 500,

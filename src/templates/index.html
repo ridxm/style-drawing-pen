@@ -14,10 +14,10 @@
   <div class="topbar-brand">penDNA <span class="brand-version">v1.0</span></div>
   <div class="topbar-stats">
     <span class="stat" id="stat-pen">
-      <span class="dot dot-cyan" id="dot-pen"></span>PEN: <b id="pen-state">CONNECTING</b>
+      <span class="dot dot-teal" id="dot-pen"></span>PEN: <b id="pen-state">CONNECTING</b>
     </span>
     <span class="stat" id="stat-cam">
-      <span class="dot dot-cyan" id="dot-cam"></span>CAMERA: <b id="cam-state">ACTIVE</b>
+      <span class="dot dot-teal" id="dot-cam"></span>CAMERA: <b id="cam-state">ACTIVE</b>
     </span>
     <span class="stat" id="stat-lat">
       BLE LATENCY: <b id="lat-value">--</b>ms
@@ -40,7 +40,7 @@
     <div class="panel video-panel">
       <div class="panel-label">CAMERA / PATH</div>
       <div class="video-stack">
-        <video id="webcam" autoplay playsinline muted></video>
+        <img id="webcam" alt="" />
         <canvas id="pathCanvas"></canvas>
         <div class="video-corners">
           <span></span><span></span><span></span><span></span>
@@ -109,7 +109,7 @@
           placeholder="describe what to draw..."
           autocomplete="off"
         />
-        <button class="btn btn-violet" id="btn-generate">GENERATE IN MY STYLE</button>
+        <button class="btn btn-coral" id="btn-generate">GENERATE IN MY STYLE</button>
       </div>
       <div class="prompt-meta">
         <span class="split-toggle">

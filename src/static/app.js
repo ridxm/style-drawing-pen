@@ -8,17 +8,16 @@
 // constants
 // ------------------------------------------------------------
 const COLORS = {
-  bg:      '#0D0D0F',
-  surface: '#161619',
-  border:  '#2A2A2E',
-  text:    '#E8E6E1',
-  muted:   '#7A7A7D',
-  cyan:    '#00E5CC',
-  coral:   '#FF5E3A',
-  amber:   '#FFAA2A',
-  violet:  '#8B5CF6',
+  bg:      '#F5F0E8',
+  surface: '#FFFFFF',
+  border:  '#1A1A1A',
+  text:    '#1A1A1A',
+  muted:   '#6B6B6B',
+  teal:    '#0F6E56',
+  coral:   '#E85D3A',
+  amber:   '#D4911E',
 };
-const CORAL_SHADES = ['#FF5E3A', '#FF8A5A', '#E04020', '#FFB088'];
+const CORAL_SHADES = ['#E85D3A', '#F08560', '#B8401F', '#F4A889'];
 const TARGET_FPS = 30;
 
 // ------------------------------------------------------------
@@ -74,7 +73,7 @@ const state = {
   capturing: false,
   generating: false,
   splitView: false,
-  pathPoints: [],         // cyan path overlay points
+  pathPoints: [],         // teal path overlay points
   pressure: [0,0,0,0],
   imu: {ax:0, ay:0, az:0, gx:0, gy:0, gz:0},
   penDown: false,
@@ -103,7 +102,7 @@ Chart.defaults.maintainAspectRatio = false;
 
 const baseScale = (max, min = 0) => ({
   min, max,
-  grid: { color: 'rgba(42,42,46,0.6)', drawTicks: false },
+  grid: { color: 'rgba(26,26,26,0.08)', drawTicks: false },
   border: { color: COLORS.border, display: false },
   ticks: {
     color: COLORS.muted,
@@ -122,9 +121,9 @@ const tremorChart = new Chart(els.tremorChart, {
     labels: tremorLabels,
     datasets: [{
       data: state.tremorSpectrum,
-      borderColor: COLORS.cyan,
+      borderColor: COLORS.teal,
       borderWidth: 1.4,
-      backgroundColor: 'rgba(0,229,204,0.10)',
+      backgroundColor: 'rgba(15,110,86,0.12)',
       fill: true,
       pointRadius: 0,
       tension: 0.35,
@@ -170,7 +169,7 @@ const velocityChart = new Chart(els.velocityChart, {
       data: new Array(80).fill(0),
       borderColor: COLORS.amber,
       borderWidth: 1.4,
-      backgroundColor: 'rgba(255,170,42,0.18)',
+      backgroundColor: 'rgba(212,145,30,0.20)',
       fill: true,
       pointRadius: 0,
       tension: 0.4,
@@ -193,7 +192,7 @@ const radarChart = new Chart(els.radarChart, {
     datasets: [{
       data: [0.5, 0.5, 0.5, 0.5],
       borderColor: COLORS.coral,
-      backgroundColor: 'rgba(255,94,58,0.22)',
+      backgroundColor: 'rgba(232,93,58,0.22)',
       borderWidth: 1.4,
       pointRadius: 2,
       pointBackgroundColor: COLORS.coral,
@@ -204,8 +203,8 @@ const radarChart = new Chart(els.radarChart, {
     scales: {
       r: {
         min: 0, max: 1,
-        grid:  { color: 'rgba(42,42,46,0.7)' },
-        angleLines: { color: 'rgba(42,42,46,0.7)' },
+        grid:  { color: 'rgba(26,26,26,0.18)' },
+        angleLines: { color: 'rgba(26,26,26,0.18)' },
         pointLabels: { color: COLORS.muted, font: { family: '"JetBrains Mono"', size: 9 } },
         ticks: { display: false, count: 3 },
       },
@@ -236,10 +235,10 @@ function drawSignature(vec) {
   const phi = v[2] * Math.PI;
   const wobble = 0.05 + v[3] * 0.15;
 
-  sigCtx.strokeStyle = COLORS.violet;
-  sigCtx.lineWidth = 1.1;
-  sigCtx.shadowColor = 'rgba(139,92,246,0.55)';
-  sigCtx.shadowBlur = 6;
+  sigCtx.strokeStyle = COLORS.coral;
+  sigCtx.lineWidth = 1.3;
+  sigCtx.shadowColor = 'rgba(0,0,0,0)';
+  sigCtx.shadowBlur = 0;
 
   sigCtx.beginPath();
   const STEPS = 600;
@@ -284,14 +283,14 @@ window.addEventListener('resize', () => {
   drawSignature();
 });
 
+const PATH_MAX = 8000;
+const PATH_FADE_SEC = 40;
+const PATH_MIN_ALPHA = 0.35;
+
 function pushPathPoint(p) {
-  // p = {x: 0..1 normalized, y: 0..1 normalized, t: timestamp ms}
-  state.pathPoints.push({ ...p, t: p.t || performance.now() });
-  // cap at ~6s of history
-  const cutoff = performance.now() - 6000;
-  while (state.pathPoints.length && state.pathPoints[0].t < cutoff) {
-    state.pathPoints.shift();
-  }
+  const t = p.t || performance.now();
+  state.pathPoints.push({ x: p.x, y: p.y, lift: !!p.lift, t });
+  if (state.pathPoints.length > PATH_MAX) state.pathPoints.shift();
 }
 
 function renderPath() {
@@ -303,22 +302,21 @@ function renderPath() {
   const pts = state.pathPoints;
   if (pts.length < 2) return;
   const now = performance.now();
+  pathCtx.lineCap = 'round';
+  pathCtx.lineJoin = 'round';
+  pathCtx.lineWidth = 2.0;
 
   for (let i = 1; i < pts.length; i++) {
     const a = pts[i - 1], b = pts[i];
-    if (b.lift || a.lift) continue;
-    const age = (now - b.t) / 6000;
-    const alpha = Math.max(0, 1 - age);
-    pathCtx.strokeStyle = `rgba(0,229,204,${alpha.toFixed(3)})`;
-    pathCtx.lineWidth = 1.6;
-    pathCtx.shadowColor = 'rgba(0,229,204,0.6)';
-    pathCtx.shadowBlur = 4;
+    if (a.lift || b.lift) continue;
+    const age = (now - b.t) / 1000;
+    const alpha = Math.max(PATH_MIN_ALPHA, 1 - age / PATH_FADE_SEC);
+    pathCtx.strokeStyle = `rgba(15,110,86,${alpha.toFixed(3)})`;
     pathCtx.beginPath();
     pathCtx.moveTo(a.x * w, a.y * h);
     pathCtx.lineTo(b.x * w, b.y * h);
     pathCtx.stroke();
   }
-  pathCtx.shadowBlur = 0;
 }
 
 // ------------------------------------------------------------
@@ -501,22 +499,16 @@ function renderLoop(now) {
 requestAnimationFrame(renderLoop);
 
 // ------------------------------------------------------------
-// webcam
+// webcam (frames pushed from server)
 // ------------------------------------------------------------
-async function initWebcam() {
-  try {
-    const stream = await navigator.mediaDevices.getUserMedia({
-      video: { width: 1280, height: 720 }, audio: false,
-    });
-    els.webcam.srcObject = stream;
-    els.camState.textContent = 'ACTIVE';
-    els.dotCam.className = 'dot dot-cyan';
-  } catch (err) {
-    els.camState.textContent = 'OFFLINE';
-    els.dotCam.className = 'dot dot-coral';
-    console.warn('webcam unavailable:', err.message);
-  }
-  resizePathCanvas();
+function setCameraState(ok, label) {
+  els.camState.textContent = label;
+  els.dotCam.className = 'dot ' + (ok ? 'dot-teal' : 'dot-coral');
+}
+
+function onCameraFrame(b64) {
+  els.webcam.src = 'data:image/jpeg;base64,' + b64;
+  if (els.camState.textContent !== 'ACTIVE') setCameraState(true, 'ACTIVE');
 }
 
 // ------------------------------------------------------------
@@ -531,17 +523,27 @@ function initSocket() {
     return;
   }
 
+  function setPenState(ok, label) {
+    els.penState.textContent = label;
+    els.dotPen.className = 'dot ' + (ok ? 'dot-teal' : 'dot-coral');
+  }
+
   socket.on('connect', () => {
-    els.penState.textContent = 'CONNECTED';
-    els.dotPen.className = 'dot dot-cyan';
+    setPenState(false, 'WAITING');
   });
   socket.on('disconnect', () => {
-    els.penState.textContent = 'OFFLINE';
-    els.dotPen.className = 'dot dot-coral';
+    setPenState(false, 'OFFLINE');
   });
   socket.on('connect_error', () => {
-    els.penState.textContent = 'OFFLINE';
-    els.dotPen.className = 'dot dot-coral';
+    setPenState(false, 'OFFLINE');
+  });
+
+  socket.on('pen_status', (s) => {
+    if (!s || !s.ok) {
+      setPenState(false, 'OFFLINE');
+      return;
+    }
+    setPenState(true, s.recording ? 'RECORDING' : 'CONNECTED');
   });
 
   socket.on('sensor_data', (d) => {
@@ -558,6 +560,13 @@ function initSocket() {
 
   socket.on('path_point', (p) => {
     pushPathPoint(p);
+  });
+
+  socket.on('camera_frame', onCameraFrame);
+
+  socket.on('camera_status', (s) => {
+    if (s && s.ok) setCameraState(true, 'ACTIVE');
+    else setCameraState(false, 'OFFLINE');
   });
 
   socket.on('style_update', (vec) => {
@@ -606,7 +615,7 @@ els.btnCapture.addEventListener('click', () => {
     els.btnCapture.classList.add('recording');
     els.capState.textContent = 'RECORDING';
     els.capState.classList.add('pulse');
-    els.dotCap.className = 'dot dot-cyan';
+    els.dotCap.className = 'dot dot-teal';
     socket && socket.emit('start_capture');
   } else {
     els.btnCapture.textContent = 'START CAPTURE';
@@ -671,7 +680,7 @@ function boot() {
   resizeDrawCanvases();
   drawSignature();
   showOverlay('draw something first, then generate');
-  initWebcam();
+  setCameraState(false, 'CONNECTING');
   initSocket();
 }
 
